@@ -1,4 +1,9 @@
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 transformers>=4.36.0
-torch>=2.1.0 
+torch>=2.1.0
+aiohttp>=3.8.0
+sentencepiece>=0.1.99
+sacremoses>=0.0.53
+brotli>=1.0.9
+aiohttp[speedups]>=3.8.0
