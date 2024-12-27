@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 # Website configuration - Selectors validated with developer tools
 SITES = {
     "VentureBeat": {
-        "url": "https://venturebeat.com/ai/",
-        "article_selector": "div.article-block",
+        "url": "https://venturebeat.com/category/ai/",
+        "article_selector": "div.article-item",
         "title_selector": "h2.article-title",
         "link_selector": "h2.article-title a",
         "content_selector": "div.article-content"
@@ -37,6 +37,20 @@ SITES = {
         "title_selector": "a",
         "link_selector": "a",
         "content_selector": "div.duet--article--article-body-component"
+    },
+    "TechXplore": {
+        "url": "https://techxplore.com/machine-learning-ai-news/",
+        "article_selector": "article.sorted-article",
+        "title_selector": ".news-title",
+        "link_selector": ".news-title a",
+        "content_selector": ".article-body"
+    },
+    "MIT Technology Review": {
+        "url": "https://www.technologyreview.com/topic/artificial-intelligence/",
+        "article_selector": ".feed__item",
+        "title_selector": ".feed__title",
+        "link_selector": ".feed__title a",
+        "content_selector": ".article__body"
     }
 }
 
@@ -75,22 +89,42 @@ translator = pipeline(
 )
 
 async def get_page_content(page, url: str) -> str:
-    """Get page content using Playwright"""
+    """Get page content using Playwright with improved waiting"""
     try:
         await page.goto(
             url, 
             wait_until="networkidle",
-            timeout=60000,
+            timeout=90000,
         )
+        
+        # 等待页面加载
         await page.wait_for_load_state("domcontentloaded")
+        await asyncio.sleep(3)
+        
+        # 更多的滚动和等待
+        for _ in range(5):  # 增加滚动次数
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(1)
+            
+            # 尝试点击"加载更多"按钮（如果存在）
+            try:
+                load_more_button = page.locator("text=Load more")
+                if await load_more_button.is_visible():
+                    await load_more_button.click()
+                    await asyncio.sleep(2)
+            except Exception:
+                pass
+        
+        # 最终等待
         await asyncio.sleep(2)
+        
         return await page.content()
     except Exception as e:
         logger.error(f"Error fetching {url}: {e}")
         return None
 
 async def get_article_links_async(page, site_name: str, site_config: dict) -> List[Dict]:
-    """Get article links"""
+    """Get article links with improved error handling and debugging"""
     html = await get_page_content(page, site_config["url"])
     if not html:
         return []
@@ -98,23 +132,47 @@ async def get_article_links_async(page, site_name: str, site_config: dict) -> Li
     soup = BeautifulSoup(html, 'html.parser')
     articles = []
     
-    elements = soup.select(site_config['article_selector'])
-    logger.info(f"Found {len(elements)} elements matching selector '{site_config['article_selector']}' for {site_name}")
+    # 尝试多个选择器组合
+    selectors = [
+        site_config['article_selector'],
+        f"main {site_config['article_selector']}",
+        f"div {site_config['article_selector']}",
+        f".content {site_config['article_selector']}"
+    ]
     
-    if len(elements) == 0:
-        logger.debug(f"Page content for {site_name}: {html[:500]}...")
+    elements = []
+    for selector in selectors:
+        elements = soup.select(selector)
+        if elements:
+            logger.info(f"Found {len(elements)} elements matching selector '{selector}' for {site_name}")
+            break
+    
+    if not elements:
+        logger.debug(f"No elements found for {site_name} with any selector")
+        logger.debug(f"Page classes found: {[c for c in soup.find_all(class_=True)[:5]]}")
     
     for article in elements[:ARTICLES_PER_SITE]:
         try:
-            title_elem = article.select_one(site_config["title_selector"])
-            link_elem = article.select_one(site_config["link_selector"])
+            # 尝试多种方式获取标题和链接
+            title_elem = (
+                article.select_one(site_config["title_selector"]) or 
+                article.find("h2") or 
+                article.find("h3") or
+                article.find("a")
+            )
+            
+            link_elem = (
+                article.select_one(site_config["link_selector"]) or 
+                title_elem.find("a") if title_elem else None or
+                article.find("a")
+            )
             
             if title_elem and link_elem:
                 link = link_elem.get('href')
                 title = title_elem.text.strip()
                 
                 if not title or not link:
-                    logger.debug(f"Empty title or link for {site_name}")
+                    logger.debug(f"Empty title or link for article in {site_name}")
                     continue
                     
                 if not link.startswith('http'):
@@ -126,11 +184,9 @@ async def get_article_links_async(page, site_name: str, site_config: dict) -> Li
                     "link": link
                 })
             else:
-                logger.debug(f"Missing title ({bool(title_elem)}) or link ({bool(link_elem)}) element for article in {site_name}")
+                logger.debug(f"Missing title ({bool(title_elem)}) or link ({bool(link_elem)}) for {site_name}")
                 if title_elem:
-                    logger.debug(f"Title element text: {title_elem.text}")
-                if link_elem:
-                    logger.debug(f"Link element href: {link_elem.get('href')}")
+                    logger.debug(f"Title element content: {title_elem}")
         except Exception as e:
             logger.error(f"Error parsing article from {site_name}: {e}")
     
