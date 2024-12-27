@@ -19,10 +19,12 @@ logger = logging.getLogger(__name__)
 SITES = {
     "VentureBeat": {
         "url": "https://venturebeat.com/category/ai/",
-        "article_selector": "div.article-item",
-        "title_selector": "h2.article-title",
-        "link_selector": "h2.article-title a",
-        "content_selector": "div.article-content"
+        "article_selector": ".ArticleList__articleItem",
+        "title_selector": ".ArticleListItem__title",
+        "link_selector": ".ArticleListItem__title a",
+        "content_selector": ".article-content",
+        "wait_for": ".ArticleList",
+        "load_more_selector": ".ArticleList__loadMore"
     },
     "Wired": {
         "url": "https://www.wired.com/tag/artificial-intelligence/",
@@ -47,10 +49,12 @@ SITES = {
     },
     "MIT Technology Review": {
         "url": "https://www.technologyreview.com/topic/artificial-intelligence/",
-        "article_selector": ".feed__item",
-        "title_selector": ".feed__title",
-        "link_selector": ".feed__title a",
-        "content_selector": ".article__body"
+        "article_selector": ".card--article, .card--articleModule",
+        "title_selector": ".card--articleModule__title, .card--article__title, h2, h3",
+        "link_selector": "a.card--articleModule__link, a.card--article__link, h2 a, h3 a",
+        "content_selector": ".contentArticle__content, .article__content, article",
+        "wait_for": ".topic__articles, .topic-page",
+        "load_more_selector": "button.load-more, .infinite-scroll-component"
     }
 }
 
@@ -88,51 +92,108 @@ translator = pipeline(
     device=-1
 )
 
-async def get_page_content(page, url: str) -> str:
-    """Get page content using Playwright with improved waiting"""
-    try:
-        await page.goto(
-            url, 
-            wait_until="networkidle",
-            timeout=90000,
-        )
-        
-        # 等待页面加载
-        await page.wait_for_load_state("domcontentloaded")
-        await asyncio.sleep(3)
-        
-        # 更多的滚动和等待
-        for _ in range(5):  # 增加滚动次数
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await asyncio.sleep(1)
+async def get_page_content(page, url: str, site_config: dict) -> str:
+    """Get page content with site-specific handling"""
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = await page.goto(
+                url, 
+                wait_until="networkidle",
+                timeout=90000,
+            )
             
-            # 尝试点击"加载更多"按钮（如果存在）
-            try:
-                load_more_button = page.locator("text=Load more")
-                if await load_more_button.is_visible():
-                    await load_more_button.click()
+            if response is None or not response.ok:
+                raise Exception(f"Failed to load page: {response.status if response else 'No response'}")
+            
+            # MIT Technology Review 特殊处理
+            if "technologyreview.com" in url:
+                # 等待文章列表加载
+                try:
+                    await page.wait_for_selector(".topic__articles, .topic-page", timeout=30000)
+                except Exception as e:
+                    logger.warning(f"Wait for article list failed: {e}")
+                
+                # 处理可能的订阅弹窗
+                try:
+                    close_button = page.locator("button[aria-label='Close']")
+                    if await close_button.is_visible():
+                        await close_button.click()
+                except Exception:
+                    pass
+                
+                # 多次滚动以加载更多内容
+                for _ in range(5):
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                     await asyncio.sleep(2)
-            except Exception:
-                pass
-        
-        # 最终等待
-        await asyncio.sleep(2)
-        
-        return await page.content()
-    except Exception as e:
-        logger.error(f"Error fetching {url}: {e}")
-        return None
+                    
+                    # 尝试点击加载更多按钮
+                    try:
+                        load_more = page.locator("button.load-more, .infinite-scroll-component")
+                        if await load_more.is_visible():
+                            await load_more.click()
+                            await asyncio.sleep(2)
+                    except Exception:
+                        pass
+                
+                # 输出页面源码以便调试
+                content = await page.content()
+                logger.debug(f"MIT Technology Review page source preview: {content[:1000]}")
+                return content
+            
+            # Special handling for VentureBeat
+            if "venturebeat.com" in url:
+                # Wait for article list to load
+                try:
+                    await page.wait_for_selector(".ArticleList", timeout=30000)
+                except Exception as e:
+                    logger.warning(f"Wait for ArticleList failed: {e}")
+                
+                # Scroll multiple times to load more content
+                for _ in range(5):  # Increase scroll attempts
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await asyncio.sleep(2)
+                    
+                    # Click "Load more" button
+                    try:
+                        load_more = page.locator(".ArticleList__loadMore")
+                        if await load_more.is_visible():
+                            await load_more.click()
+                            await asyncio.sleep(2)
+                    except Exception:
+                        pass
+            
+            # Regular wait and scroll
+            await page.wait_for_load_state("domcontentloaded")
+            await asyncio.sleep(3)
+            
+            # Output page source for debugging
+            if "venturebeat.com" in url:
+                content = await page.content()
+                logger.debug(f"VentureBeat page source preview: {content[:1000]}")
+                return content
+            
+            return await page.content()
+            
+        except Exception as e:
+            logger.error(f"Attempt {attempt + 1}/{MAX_RETRIES} failed for {url}: {e}")
+            if attempt < MAX_RETRIES - 1:
+                wait_time = 2 ** attempt
+                logger.info(f"Retrying in {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"All attempts failed for {url}")
+                return None
 
 async def get_article_links_async(page, site_name: str, site_config: dict) -> List[Dict]:
     """Get article links with improved error handling and debugging"""
-    html = await get_page_content(page, site_config["url"])
+    html = await get_page_content(page, site_config["url"], site_config)
     if not html:
         return []
     
     soup = BeautifulSoup(html, 'html.parser')
     articles = []
     
-    # 尝试多个选择器组合
+    # Try multiple selector combinations
     selectors = [
         site_config['article_selector'],
         f"main {site_config['article_selector']}",
@@ -153,7 +214,7 @@ async def get_article_links_async(page, site_name: str, site_config: dict) -> Li
     
     for article in elements[:ARTICLES_PER_SITE]:
         try:
-            # 尝试多种方式获取标题和链接
+            # Try multiple ways to get title and link
             title_elem = (
                 article.select_one(site_config["title_selector"]) or 
                 article.find("h2") or 
@@ -193,9 +254,9 @@ async def get_article_links_async(page, site_name: str, site_config: dict) -> Li
     logger.info(f"Found {len(articles)} valid articles for {site_name}")
     return articles
 
-async def extract_article_content_async(page, url: str, content_selector: str) -> str:
+async def extract_article_content_async(page, url: str, content_selector: str, site_config: dict) -> str:
     """Extract article content"""
-    html = await get_page_content(page, url)
+    html = await get_page_content(page, url, site_config)
     if not html:
         return None
     
@@ -249,46 +310,89 @@ def translate_text(text: str) -> str:
         return text
 
 async def process_site(browser, site_name: str, site_config: dict) -> List[Dict]:
-    """Process all articles from a single site"""
+    """Process site with improved error handling and retries"""
+    processed_articles = []
+    retry_queue = []  
+    
     try:
         page = await browser.new_page()
         articles = await get_article_links_async(page, site_name, site_config)
+        
         if not articles:
             logger.warning(f"No articles found for {site_name}")
             await page.close()
             return []
-            
-        processed_articles = []
+        
         for article in articles:
             try:
                 content = await extract_article_content_async(
                     page,
                     article["link"], 
-                    site_config["content_selector"]
+                    site_config["content_selector"],
+                    site_config
                 )
-                if content:
-                    summary = summarize_and_translate(content)
-                    if summary:
-                        article_data = {
-                            "site": site_name,
-                            "title": article["title"],
-                            "link": article["link"],
-                            "summary_en": summary["en"],
-                            "summary_zh": summary["zh"],
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        processed_articles.append(article_data)
-                        logger.info(f"Processed article: {article['title']}")
+                
+                if not content:
+                    retry_queue.append(article)
+                    continue
+                
+                summary = summarize_and_translate(content)
+                if summary:
+                    article_data = {
+                        "site": site_name,
+                        "title": article["title"],
+                        "link": article["link"],
+                        "summary_en": summary["en"],
+                        "summary_zh": summary["zh"],
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    processed_articles.append(article_data)
+                    logger.info(f"Processed article: {article['title']}")
+                
                 await asyncio.sleep(random.uniform(2, 4))
+                
             except Exception as e:
                 logger.error(f"Error processing article {article['link']}: {e}")
-                continue
+                retry_queue.append(article)
+        
+        # Process retry queue
+        if retry_queue:
+            logger.info(f"Retrying {len(retry_queue)} failed articles for {site_name}")
+            for article in retry_queue:
+                for attempt in range(MAX_RETRIES):
+                    try:
+                        content = await extract_article_content_async(
+                            page,
+                            article["link"], 
+                            site_config["content_selector"],
+                            site_config
+                        )
+                        
+                        if content:
+                            summary = summarize_and_translate(content)
+                            if summary:
+                                article_data = {
+                                    "site": site_name,
+                                    "title": article["title"],
+                                    "link": article["link"],
+                                    "summary_en": summary["en"],
+                                    "summary_zh": summary["zh"],
+                                    "timestamp": datetime.now().isoformat()
+                                }
+                                processed_articles.append(article_data)
+                                logger.info(f"Successfully retried article: {article['title']}")
+                                break
+                        
+                        await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                    except Exception as e:
+                        logger.error(f"Retry {attempt + 1} failed for {article['link']}: {e}")
         
         await page.close()
         return processed_articles
+        
     except Exception as e:
         logger.error(f"Error processing site {site_name}: {e}")
-        return []
+        return processed_articles
 
 def summarize_and_translate(content: str) -> Dict[str, str]:
     """Summarize content and translate to Chinese with improved quality"""
@@ -351,47 +455,64 @@ def summarize_and_translate(content: str) -> Dict[str, str]:
 
 async def main_async():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                '--disable-gpu',
-                '--disable-dev-shm-usage',
-                '--disable-setuid-sandbox',
-                '--no-sandbox',
-            ]
-        )
-        
-        context = await browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        )
-        
-        tasks = []
-        for site_name, site_config in SITES.items():
-            logger.info(f"Processing {site_name}...")
-            tasks.append(process_site(context, site_name, site_config))
-        
-        results = await asyncio.gather(*tasks)
-        all_articles = [article for site_articles in results for article in site_articles]
-        
-        logger.info(f"Total articles processed: {len(all_articles)}")
-        
-        output = {
-            "timestamp": datetime.now().isoformat(),
-            "articles": all_articles
-        }
-        
-        os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
-        
-        try:
-            with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-                json.dump(output, f, ensure_ascii=False, indent=2)
-            logger.info(f"Results saved to {OUTPUT_FILE}")
-        except Exception as e:
-            logger.error(f"Error saving to file: {e}")
-        
-        await context.close()
-        await browser.close()
+        for attempt in range(MAX_RETRIES):
+            try:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--disable-gpu',
+                        '--disable-dev-shm-usage',
+                        '--disable-setuid-sandbox',
+                        '--no-sandbox',
+                    ]
+                )
+                
+                context = await browser.new_context(
+                    viewport={'width': 1920, 'height': 1080},
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                )
+                
+                tasks = []
+                for site_name, site_config in SITES.items():
+                    logger.info(f"Processing {site_name}...")
+                    tasks.append(process_site(context, site_name, site_config))
+                
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Process results, filtering out exceptions
+                all_articles = []
+                for result in results:
+                    if isinstance(result, list):
+                        all_articles.extend(result)
+                    else:
+                        logger.error(f"Task failed with error: {result}")
+                
+                logger.info(f"Total articles processed: {len(all_articles)}")
+                
+                output = {
+                    "timestamp": datetime.now().isoformat(),
+                    "articles": all_articles
+                }
+                
+                os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+                
+                with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(output, f, ensure_ascii=False, indent=2)
+                logger.info(f"Results saved to {OUTPUT_FILE}")
+                
+                await context.close()
+                await browser.close()
+                break
+                
+            except Exception as e:
+                logger.error(f"Attempt {attempt + 1} failed: {e}")
+                if attempt < MAX_RETRIES - 1:
+                    wait_time = 2 ** attempt
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error("All attempts failed")
+                    raise
 
 def main():
     asyncio.run(main_async())
