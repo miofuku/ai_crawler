@@ -60,7 +60,11 @@ SITES = {
 
 MAX_RETRIES = 3
 ARTICLES_PER_SITE = 5
-OUTPUT_FILE = "output/ai_news_summary.json"
+OUTPUT_DIR = "output"
+OUTPUT_FILE = os.path.join(
+    OUTPUT_DIR, 
+    f"ai_news_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+)
 
 # Translation model
 MODELS = {
@@ -105,15 +109,15 @@ async def get_page_content(page, url: str, site_config: dict) -> str:
             if response is None or not response.ok:
                 raise Exception(f"Failed to load page: {response.status if response else 'No response'}")
             
-            # MIT Technology Review 特殊处理
+            # MIT Technology Review special handling
             if "technologyreview.com" in url:
-                # 等待文章列表加载
+                # Wait for article list to load
                 try:
                     await page.wait_for_selector(".topic__articles, .topic-page", timeout=30000)
                 except Exception as e:
                     logger.warning(f"Wait for article list failed: {e}")
                 
-                # 处理可能的订阅弹窗
+                # Handle possible subscription popup
                 try:
                     close_button = page.locator("button[aria-label='Close']")
                     if await close_button.is_visible():
@@ -121,12 +125,12 @@ async def get_page_content(page, url: str, site_config: dict) -> str:
                 except Exception:
                     pass
                 
-                # 多次滚动以加载更多内容
+                # Scroll multiple times to load more content
                 for _ in range(5):
                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                     await asyncio.sleep(2)
                     
-                    # 尝试点击加载更多按钮
+                    # Try clicking the "Load more" button
                     try:
                         load_more = page.locator("button.load-more, .infinite-scroll-component")
                         if await load_more.is_visible():
@@ -135,7 +139,7 @@ async def get_page_content(page, url: str, site_config: dict) -> str:
                     except Exception:
                         pass
                 
-                # 输出页面源码以便调试
+                # Output page source for debugging
                 content = await page.content()
                 logger.debug(f"MIT Technology Review page source preview: {content[:1000]}")
                 return content
