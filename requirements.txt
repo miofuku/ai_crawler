@@ -7,3 +7,4 @@ sentencepiece>=0.1.99
 sacremoses>=0.0.53
 brotli>=1.0.9
 aiohttp[speedups]>=3.8.0
+playwright>=1.41.0
