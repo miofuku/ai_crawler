@@ -17,15 +17,6 @@ logger = logging.getLogger(__name__)
 
 # Website configuration - Selectors validated with developer tools
 SITES = {
-    "VentureBeat": {
-        "url": "https://venturebeat.com/category/ai/",
-        "article_selector": ".ArticleList__articleItem",
-        "title_selector": ".ArticleListItem__title",
-        "link_selector": ".ArticleListItem__title a",
-        "content_selector": ".article-content",
-        "wait_for": ".ArticleList",
-        "load_more_selector": ".ArticleList__loadMore"
-    },
     "Wired": {
         "url": "https://www.wired.com/tag/artificial-intelligence/",
         "article_selector": "div.summary-item",
@@ -39,22 +30,6 @@ SITES = {
         "title_selector": "a",
         "link_selector": "a",
         "content_selector": "div.duet--article--article-body-component"
-    },
-    "TechXplore": {
-        "url": "https://techxplore.com/machine-learning-ai-news/",
-        "article_selector": "article.sorted-article",
-        "title_selector": ".news-title",
-        "link_selector": ".news-title a",
-        "content_selector": ".article-body"
-    },
-    "MIT Technology Review": {
-        "url": "https://www.technologyreview.com/topic/artificial-intelligence/",
-        "article_selector": ".card--article, .card--articleModule",
-        "title_selector": ".card--articleModule__title, .card--article__title, h2, h3",
-        "link_selector": "a.card--articleModule__link, a.card--article__link, h2 a, h3 a",
-        "content_selector": ".contentArticle__content, .article__content, article",
-        "wait_for": ".topic__articles, .topic-page",
-        "load_more_selector": "button.load-more, .infinite-scroll-component"
     }
 }
 
@@ -100,81 +75,27 @@ async def get_page_content(page, url: str, site_config: dict) -> str:
     """Get page content with site-specific handling"""
     for attempt in range(MAX_RETRIES):
         try:
+            # set user agent and viewport
+            await page.set_viewport_size({"width": 1920, "height": 1080})
+            await page.set_extra_http_headers({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
+            
             response = await page.goto(
                 url, 
                 wait_until="networkidle",
-                timeout=90000,
+                timeout=120000,
             )
             
             if response is None or not response.ok:
                 raise Exception(f"Failed to load page: {response.status if response else 'No response'}")
             
-            # MIT Technology Review special handling
-            if "technologyreview.com" in url:
-                # Wait for article list to load
-                try:
-                    await page.wait_for_selector(".topic__articles, .topic-page", timeout=30000)
-                except Exception as e:
-                    logger.warning(f"Wait for article list failed: {e}")
-                
-                # Handle possible subscription popup
-                try:
-                    close_button = page.locator("button[aria-label='Close']")
-                    if await close_button.is_visible():
-                        await close_button.click()
-                except Exception:
-                    pass
-                
-                # Scroll multiple times to load more content
-                for _ in range(5):
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await asyncio.sleep(2)
-                    
-                    # Try clicking the "Load more" button
-                    try:
-                        load_more = page.locator("button.load-more, .infinite-scroll-component")
-                        if await load_more.is_visible():
-                            await load_more.click()
-                            await asyncio.sleep(2)
-                    except Exception:
-                        pass
-                
-                # Output page source for debugging
-                content = await page.content()
-                logger.debug(f"MIT Technology Review page source preview: {content[:1000]}")
-                return content
-            
-            # Special handling for VentureBeat
-            if "venturebeat.com" in url:
-                # Wait for article list to load
-                try:
-                    await page.wait_for_selector(".ArticleList", timeout=30000)
-                except Exception as e:
-                    logger.warning(f"Wait for ArticleList failed: {e}")
-                
-                # Scroll multiple times to load more content
-                for _ in range(5):  # Increase scroll attempts
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await asyncio.sleep(2)
-                    
-                    # Click "Load more" button
-                    try:
-                        load_more = page.locator(".ArticleList__loadMore")
-                        if await load_more.is_visible():
-                            await load_more.click()
-                            await asyncio.sleep(2)
-                    except Exception:
-                        pass
-            
-            # Regular wait and scroll
             await page.wait_for_load_state("domcontentloaded")
             await asyncio.sleep(3)
             
-            # Output page source for debugging
-            if "venturebeat.com" in url:
-                content = await page.content()
-                logger.debug(f"VentureBeat page source preview: {content[:1000]}")
-                return content
+            for _ in range(3):
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(2)
             
             return await page.content()
             
