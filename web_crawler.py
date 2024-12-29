@@ -30,6 +30,14 @@ SITES = {
         "title_selector": "a",
         "link_selector": "a",
         "content_selector": "div.duet--article--article-body-component"
+    },
+    "Cointelegraph": {
+        "url": "https://cointelegraph.com/news",
+        "article_selector": "article.post-card-inline",
+        "title_selector": ".post-card-inline__title",
+        "link_selector": "a.post-card-inline__title-link",
+        "content_selector": ".post__content-wrapper",
+        "wait_for": ".posts-listing"
     }
 }
 
@@ -72,30 +80,65 @@ translator = pipeline(
 )
 
 async def get_page_content(page, url: str, site_config: dict) -> str:
-    """Get page content with site-specific handling"""
+    """Get page content with improved handling"""
     for attempt in range(MAX_RETRIES):
         try:
-            # set user agent and viewport
+            # 设置用户代理和视口
             await page.set_viewport_size({"width": 1920, "height": 1080})
             await page.set_extra_http_headers({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
             })
             
             response = await page.goto(
                 url, 
                 wait_until="networkidle",
-                timeout=120000,
+                timeout=60000,
             )
             
             if response is None or not response.ok:
                 raise Exception(f"Failed to load page: {response.status if response else 'No response'}")
             
+            # 等待页面加载完成
             await page.wait_for_load_state("domcontentloaded")
-            await asyncio.sleep(3)
+            await page.wait_for_load_state("networkidle")
             
-            for _ in range(3):
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(2)
+            # Cointelegraph 特殊处理
+            if "cointelegraph.com" in url:
+                try:
+                    await page.wait_for_selector(".posts-listing", timeout=30000)
+                    # 处理 cookie 提示
+                    try:
+                        cookie_button = page.locator("button.cookie-policy-button")
+                        if await cookie_button.is_visible():
+                            await cookie_button.click()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.warning(f"Cointelegraph special handling failed: {e}")
+            
+            await asyncio.sleep(2)
+            
+            # 多次平滑滚动
+            for _ in range(5):
+                await page.evaluate("""
+                    window.scrollTo({
+                        top: document.body.scrollHeight,
+                        behavior: 'smooth'
+                    });
+                """)
+                await asyncio.sleep(1)
+                
+                # 尝试点击"加载更多"按钮
+                for selector in [".load-more", ".more-button", ".view-more"]:
+                    try:
+                        load_more = page.locator(selector)
+                        if await load_more.is_visible():
+                            await load_more.click()
+                            await asyncio.sleep(2)
+                            await page.wait_for_load_state("networkidle")
+                    except Exception:
+                        continue
             
             return await page.content()
             
@@ -320,55 +363,64 @@ async def process_site(browser, site_name: str, site_config: dict) -> List[Dict]
         return processed_articles
 
 def summarize_and_translate(content: str) -> Dict[str, str]:
-    """Summarize content and translate to Chinese with improved quality"""
+    """Summarize content with dynamic length handling"""
     if not content or len(content.split()) < 30:
         return None
         
     try:
-        # Increase minimum output length to get a more detailed summary
-        max_length = MODELS["summarizer"]["max_length"]
-        parts = [content[i:i+max_length] for i in range(0, len(content), max_length)]
-        summary_parts = []
+        # 检测内容语言
+        is_chinese = any('\u4e00' <= char <= '\u9fff' for char in content)
         
-        for part in parts[:3]:  # Process the first three parts
-            if len(part.split()) >= 30:
-                # Adjust length limit to ensure summary contains enough information
-                input_length = len(part.split())
-                max_output_length = max(
-                    min(input_length * 0.4, 250),  # Increase maximum length to 250
-                    MODELS["summarizer"]["default_min_length"]
-                )
-                min_output_length = max(
-                    min(input_length * 0.2, 100),  # Ensure minimum length is at least 20% of the original text
-                    MODELS["summarizer"]["default_min_length"]
-                )
-                
-                # Use stricter generation parameters to get a more complete summary
-                summary = summarizer(
-                    part, 
-                    max_length=int(max_output_length),
-                    min_length=int(min_output_length),
-                    length_penalty=2.0,  # Increase length penalty to encourage longer summaries
-                    num_beams=5,  # Increase beam search width
-                    early_stopping=True,
-                    do_sample=False,
-                    repetition_penalty=1.2,  # Add repetition penalty
-                    no_repeat_ngram_size=3  # Avoid repeating phrases
-                )[0]['summary_text']
-                
-                # Make sure the summary contains key information
-                if not any(keyword in summary.lower() for keyword in ['ai', 'artificial intelligence', 'ml', 'machine learning']):
-                    # If the summary does not contain keywords, try extracting sentences from the beginning
-                    first_sentences = '. '.join(part.split('.')[:3])
-                    if len(first_sentences.split()) > 30:
-                        summary = first_sentences
-                
-                summary_parts.append(summary)
-        
-        summary_en = " ".join(summary_parts)
-        
-        # Improve translation quality
-        summary_zh = translate_text(summary_en)
+        if is_chinese:
+            # 中文内容处理
+            translated_en = translator(
+                content, 
+                src_lang="zh", 
+                tgt_lang="en",
+                max_length=1024
+            )[0]['translation_text']
+            
+            # 动态计算摘要长度
+            input_length = len(translated_en.split())
+            max_output_length = min(input_length, 150)  # 限制最大长度
+            min_output_length = min(50, max_output_length - 10)  # 确保最小长度合理
+            
+            summary_en = summarizer(
+                translated_en,
+                max_length=max_output_length,
+                min_length=min_output_length,
+                length_penalty=2.0,
+                num_beams=4,
+                early_stopping=True
+            )[0]['summary_text']
+            
+            summary_zh = translator(
+                summary_en,
+                src_lang="en",
+                tgt_lang="zh",
+                max_length=1024
+            )[0]['translation_text']
+        else:
+            # 英文内容处理
+            input_length = len(content.split())
+            max_output_length = min(input_length, 150)  # 限制最大长度
+            min_output_length = min(50, max_output_length - 10)  # 确保最小长度合理
+            
+            summary_en = summarizer(
+                content,
+                max_length=max_output_length,
+                min_length=min_output_length,
+                length_penalty=2.0,
+                num_beams=4,
+                early_stopping=True
+            )[0]['summary_text']
+            
+            summary_zh = translator(
+                summary_en,
+                src_lang="en",
+                tgt_lang="zh",
+                max_length=1024
+            )[0]['translation_text']
         
         return {
             "en": summary_en,
