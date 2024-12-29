@@ -30,14 +30,6 @@ SITES = {
         "title_selector": "a",
         "link_selector": "a",
         "content_selector": "div.duet--article--article-body-component"
-    },
-    "Cointelegraph": {
-        "url": "https://cointelegraph.com/news",
-        "article_selector": "article.post-card-inline",
-        "title_selector": ".post-card-inline__title",
-        "link_selector": "a.post-card-inline__title-link",
-        "content_selector": ".post__content-wrapper",
-        "wait_for": ".posts-listing"
     }
 }
 
@@ -90,10 +82,11 @@ async def get_page_content(page, url: str, site_config: dict) -> str:
                 "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
             })
             
+            # 使用更快的加载策略
             response = await page.goto(
                 url, 
-                wait_until="networkidle",
-                timeout=60000,
+                wait_until="domcontentloaded",  # 改为更快的等待条件
+                timeout=30000,  # 减少超时时间
             )
             
             if response is None or not response.ok:
@@ -101,26 +94,10 @@ async def get_page_content(page, url: str, site_config: dict) -> str:
             
             # 等待页面加载完成
             await page.wait_for_load_state("domcontentloaded")
-            await page.wait_for_load_state("networkidle")
-            
-            # Cointelegraph 特殊处理
-            if "cointelegraph.com" in url:
-                try:
-                    await page.wait_for_selector(".posts-listing", timeout=30000)
-                    # 处理 cookie 提示
-                    try:
-                        cookie_button = page.locator("button.cookie-policy-button")
-                        if await cookie_button.is_visible():
-                            await cookie_button.click()
-                    except Exception:
-                        pass
-                except Exception as e:
-                    logger.warning(f"Cointelegraph special handling failed: {e}")
-            
             await asyncio.sleep(2)
             
-            # 多次平滑滚动
-            for _ in range(5):
+            # 平滑滚动
+            for _ in range(3):
                 await page.evaluate("""
                     window.scrollTo({
                         top: document.body.scrollHeight,
@@ -128,17 +105,6 @@ async def get_page_content(page, url: str, site_config: dict) -> str:
                     });
                 """)
                 await asyncio.sleep(1)
-                
-                # 尝试点击"加载更多"按钮
-                for selector in [".load-more", ".more-button", ".view-more"]:
-                    try:
-                        load_more = page.locator(selector)
-                        if await load_more.is_visible():
-                            await load_more.click()
-                            await asyncio.sleep(2)
-                            await page.wait_for_load_state("networkidle")
-                    except Exception:
-                        continue
             
             return await page.content()
             
