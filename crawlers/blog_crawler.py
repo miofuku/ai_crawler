@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 class BlogCrawler(BaseCrawler):
     async def get_content(self, page, url: str, site_config: dict) -> str:
-        """获取页面内容"""
+        """Get page content"""
         for attempt in range(self.max_retries):
             try:
                 # Log request details
@@ -16,10 +16,10 @@ class BlogCrawler(BaseCrawler):
                 logger.debug(f"Page viewport: 1920x1080")
                 logger.debug(f"Site config: {site_config}")
                 
-                # 设置更真实的浏览器环境
+                # Set a more realistic browser environment
                 await page.set_viewport_size({"width": 1920, "height": 1080})
                 
-                # 设置更完整的请求头
+                # Set a more complete request header
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -47,11 +47,11 @@ class BlogCrawler(BaseCrawler):
                 
                 await page.set_extra_http_headers(headers)
 
-                # 配置页面
+                # Configure page
                 if site_config.get("needs_js"):
                     await page.route("**/*", lambda route: route.continue_())
 
-                # 访问页面
+                # Visit page
                 response = await page.goto(
                     url,
                     wait_until="networkidle",
@@ -73,7 +73,7 @@ class BlogCrawler(BaseCrawler):
                 if response is None or not response.ok:
                     raise Exception(f"Failed to load page: {response.status if response else 'No response'}")
 
-                # 等待页面加载
+                # Wait for page load
                 if site_config.get("wait_for"):
                     try:
                         await page.wait_for_selector(site_config["wait_for"], timeout=30000)
@@ -83,7 +83,7 @@ class BlogCrawler(BaseCrawler):
                 
                 await asyncio.sleep(3)  # Give extra time for dynamic content
                 
-                # 处理 cookie 提示和弹窗
+                # Handle cookie prompts and popups
                 for selector in [
                     "button[data-testid='cookie-policy-dialog-accept']",
                     "button[aria-label='Accept cookies']",
@@ -100,7 +100,7 @@ class BlogCrawler(BaseCrawler):
                     except Exception:
                         continue
 
-                # 根据配置调整滚动次数
+                # Adjust scroll times based on configuration
                 scroll_times = site_config.get("scroll_times", 3)
                 for _ in range(scroll_times):
                     await page.evaluate("""
@@ -182,6 +182,39 @@ class BlogCrawler(BaseCrawler):
                     # Add debug logging
                     logger.debug(f"Found title: {title} for link: {link}")
                 
+                # Special handling for Hugging Face blog
+                elif "huggingface.co" in site_config["url"]:
+                    # Get title from the element itself
+                    title_selectors = [
+                        "h1", "h2", ".text-2xl", ".font-bold",
+                        "div[class*='heading']", "div[class*='title']"
+                    ]
+                    
+                    for selector in title_selectors:
+                        title_elem = element.select_one(selector)
+                        if title_elem:
+                            title = title_elem.get_text(strip=True)
+                            if title:
+                                break
+                    
+                    # If no title found in element, try parent elements
+                    if not title:
+                        parent = element.parent
+                        while parent and not title:
+                            for selector in title_selectors:
+                                title_elem = parent.select_one(selector)
+                                if title_elem:
+                                    title = title_elem.get_text(strip=True)
+                                    if title:
+                                        break
+                            parent = parent.parent
+                    
+                    # If still no title, try getting it from aria-label
+                    if not title:
+                        title = element.get('aria-label', '').strip()
+                    
+                    logger.debug(f"Hugging Face blog - Found link: {link}, title: {title}")
+                
                 if title and link:
                     articles.append({
                         "title": title,
@@ -197,7 +230,7 @@ class BlogCrawler(BaseCrawler):
         return articles
 
     async def get_article_content(self, page, url: str, site_config: dict) -> str:
-        """获取文章内容"""
+        """Get article content"""
         try:
             logger.debug(f"Fetching content from: {url}")
             
@@ -233,6 +266,22 @@ class BlogCrawler(BaseCrawler):
                 except Exception as e:
                     logger.error(f"Error extracting content with selector {content_selector}: {e}")
                     
+                if "huggingface.co" in url:
+                    try:
+                        # Wait for main content
+                        await page.wait_for_selector("main", timeout=10000)
+                        
+                        # Try multiple content selectors
+                        for selector in ["main article", "div.prose", ".markdown", "main div[class*='prose']"]:
+                            content_elem = await page.query_selector(selector)
+                            if content_elem:
+                                text = await content_elem.inner_text()
+                                if text and len(text.strip()) > 100:  # Ensure we have substantial content
+                                    return text.strip()
+                                    
+                    except Exception as e:
+                        logger.warning(f"Error getting Hugging Face content: {e}")
+                
             return ""  # Return empty string instead of None
             
         except Exception as e:

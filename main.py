@@ -20,18 +20,18 @@ from playwright.async_api import async_playwright
 from transformers import pipeline
 import aiohttp
 
-# 配置日志
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 配置输出
+# Configure output
 OUTPUT_DIR = "output"
 OUTPUT_FILE = os.path.join(
     OUTPUT_DIR, 
     f"ai_news_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 )
 
-# 初始化模型
+# Initialize model
 summarizer = pipeline(
     "summarization", 
     model="sshleifer/distilbart-cnn-12-6",
@@ -72,11 +72,15 @@ async def summarize_content(content: str, summarizer, translator) -> dict:
         # Combine paragraphs into a single text for initial summarization
         full_text = ' '.join(paragraphs)
         
-        # Generate initial summary
+        # Generate initial summary with dynamic max_length
+        input_length = len(full_text[:1024])
+        max_length = min(150, input_length - 10)  # Ensure output is shorter than input
+        min_length = min(50, max_length - 10)  # Ensure min_length is less than max_length
+
         initial_summary = summarizer(
             full_text[:1024],  # Limit input length
-            max_length=150,
-            min_length=50,
+            max_length=max_length,
+            min_length=min_length,
             do_sample=False
         )
         summary_en = initial_summary[0]['summary_text'] if initial_summary else ""
@@ -87,10 +91,14 @@ async def summarize_content(content: str, summarizer, translator) -> dict:
         chunks = [full_text[i:i + chunk_size] for i in range(0, len(full_text), chunk_size)]
         
         for chunk in chunks:
+            chunk_length = len(chunk)
+            max_length = min(50, chunk_length - 5)  # Ensure output is shorter than input
+            min_length = min(20, max_length - 5)  # Ensure min_length is less than max_length
+
             point_summary = summarizer(
                 chunk,
-                max_length=50,  # Shorter summaries for key points
-                min_length=20,
+                max_length=max_length,
+                min_length=min_length,
                 do_sample=False
             )
             if point_summary:
@@ -116,28 +124,25 @@ async def summarize_content(content: str, summarizer, translator) -> dict:
         return None
 
 async def process_site(browser, site_name: str, site_config: dict, crawler: BaseCrawler) -> List[Dict]:
-    """Process a single site"""
-    page = None
+    """Process a single blog-based site"""
     try:
-        # 为每个网站创建新的页面
+        # Create a new page for each site
         page = await browser.new_page()
-        
-        # 获取文章列表
-        html = await crawler.get_content(page, site_config["url"], site_config)
-        articles = await crawler.parse_articles(html, site_config)
-        
-        if not articles:
-            logger.warning(f"No articles found for {site_name}")
-            return []
-        
-        processed_articles = []
-        for article in articles:
-            try:
-                # 为每篇文章创建新的页面
-                article_page = await browser.new_page()
+        try:
+            html = await crawler.get_content(page, site_config["url"], site_config)
+            articles = await crawler.parse_articles(html, site_config)
+            
+            if not articles:
+                logger.warning(f"No articles found for {site_name}")
+                return []
+                
+            processed_articles = []
+            for article in articles:
                 try:
-                    content = await crawler.get_article_content(article_page, article["link"], site_config)
+                    logger.info(f"Processing article: {article['title']}")
+                    content = await crawler.get_article_content(page, article["link"], site_config)
                     if content:
+                        logger.info(f"Got content for article: {article['title']} ({len(content)} chars)")
                         summary = await summarize_content(content, summarizer, translator)
                         if summary:
                             article_data = {
@@ -149,25 +154,25 @@ async def process_site(browser, site_name: str, site_config: dict, crawler: Base
                                 "timestamp": datetime.now().isoformat()
                             }
                             processed_articles.append(article_data)
-                            logger.info(f"Processed article: {article['title']}")
-                finally:
-                    # 确保关闭文章页面
-                    await article_page.close()
-                
-                await asyncio.sleep(2)  # 避免请求过快
-                
-            except Exception as e:
-                logger.error(f"Error processing article {article['link']}: {e}")
-        
-        return processed_articles
-        
-    except Exception as e:
-        logger.error(f"Error processing site {site_name}: {e}")
-        return []
-    finally:
-        # 确保关闭主页面
-        if page:
+                            logger.info(f"Successfully processed article: {article['title']}")
+                        else:
+                            logger.error(f"Failed to generate summary for article: {article['title']}")
+                    else:
+                        logger.error(f"Failed to get content for article: {article['title']}")
+                    
+                    await asyncio.sleep(2)  # Avoid too frequent requests
+                    
+                except Exception as e:
+                    logger.error(f"Error processing article {article['link']}: {e}", exc_info=True)
+            
+            return processed_articles
+            
+        finally:
             await page.close()
+            
+    except Exception as e:
+        logger.error(f"Error processing site {site_name}: {e}", exc_info=True)
+        return []
 
 async def process_api_site(session, site_name: str, site_config: dict, crawler: BaseCrawler) -> List[Dict]:
     """Process a single API-based site"""
@@ -190,8 +195,8 @@ async def process_api_site(session, site_name: str, site_config: dict, crawler: 
                             "site": site_name,
                             "title": article["title"],
                             "link": article["link"],
-                            "summary_en": summary["en"],
-                            "summary_zh": summary["zh"],
+                            "summary_en": summary["summary"]["en"],
+                            "summary_zh": summary["summary"]["zh"],
                             "timestamp": datetime.now().isoformat()
                         }
                         processed_articles.append(article_data)
@@ -210,104 +215,47 @@ async def process_api_site(session, site_name: str, site_config: dict, crawler: 
 
 async def process_rss_site(session, site_name: str, site_config: dict, crawler: BaseCrawler) -> List[Dict]:
     """Process a single RSS-based site"""
-    return await process_api_site(session, site_name, site_config, crawler)  # RSS processing is similar to API
-
-async def process_source(name: str, config: dict) -> List[Dict]:
     try:
-        logger.info(f"Processing source: {name}")
+        html = await crawler.get_content(session, site_config["url"], site_config)
+        articles = await crawler.parse_articles(html, site_config)
         
-        # Initialize appropriate crawler
-        if config.get("is_rss"):
-            crawler = RSSCrawler()
-        elif config.get("is_api"):
-            crawler = APICrawler()
-        else:
-            crawler = BlogCrawler()
-
-        # Get articles
-        articles = await crawler.get_articles(name, config)
         if not articles:
-            logger.warning(f"No articles found for {name}")
+            logger.warning(f"No articles found for {site_name}")
             return []
-
-        # Process each article
+            
         processed_articles = []
-        async with aiohttp.ClientSession() as session:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch()
-                page = await browser.new_page()
+        for article in articles:
+            try:
+                logger.info(f"Processing article: {article['title']}")
+                content = await crawler.get_article_content(session, article["link"], site_config)
+                if content:
+                    logger.info(f"Got content for article: {article['title']} ({len(content)} chars)")
+                    summary = await summarize_content(content, summarizer, translator)
+                    if summary:
+                        article_data = {
+                            "site": site_name,
+                            "title": article["title"],
+                            "link": article["link"],
+                            "summary_en": summary["summary"]["en"],
+                            "summary_zh": summary["summary"]["zh"],
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        processed_articles.append(article_data)
+                        logger.info(f"Successfully processed article: {article['title']}")
+                    else:
+                        logger.error(f"Failed to generate summary for article: {article['title']}")
+                else:
+                    logger.error(f"Failed to get content for article: {article['title']}")
                 
-                for article in articles:
-                    try:
-                        # Get content based on crawler type
-                        if config.get("is_rss"):
-                            content = await crawler.get_article_content(session, article["link"], config)
-                        elif config.get("is_api"):
-                            content = article.get("content")
-                        else:
-                            content = await crawler.get_article_content(page, article["link"], config)
-                        
-                        if content:
-                            # Clean content
-                            cleaned_content = ' '.join(str(content).split())
-                            
-                            # Calculate appropriate max_length based on input length
-                            input_length = len(cleaned_content.split())
-                            max_length = min(150, max(40, input_length // 2))  # Set max_length to half of input length
-                            
-                            try:
-                                # Generate summary with dynamic max_length
-                                summary_result = summarizer(
-                                    cleaned_content[:1024],  # Limit input to 1024 chars
-                                    max_length=max_length,
-                                    min_length=min(30, max_length - 10),  # Ensure min_length is less than max_length
-                                    do_sample=False
-                                )
-                                
-                                # Extract summary text
-                                summary_en = summary_result[0]['summary_text'] if summary_result else ""
-                                
-                                # Generate Chinese translation
-                                if summary_en:
-                                    translation_result = translator(summary_en)
-                                    summary_zh = translation_result[0]['translation_text'] if translation_result else ""
-                                else:
-                                    summary_zh = ""
-                                
-                                processed_articles.append({
-                                    "title": article["title"],
-                                    "link": article["link"],
-                                    "content": cleaned_content,  
-                                    "summary_en": summary_en,
-                                    "summary_zh": summary_zh,
-                                    "timestamp": datetime.now().isoformat()
-                                })
-                                logger.info(f"Processed article: {article['title']}")
-                                
-                            except Exception as e:
-                                logger.error(f"Error processing summaries: {e}")
-                                processed_articles.append({
-                                    "title": article["title"],
-                                    "link": article["link"],
-                                    "content": cleaned_content,  
-                                    "summary_en": "",
-                                    "summary_zh": "",
-                                    "timestamp": datetime.now().isoformat()
-                                })
-                        else:
-                            logger.warning(f"No content found for article: {article['title']}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error processing article {article.get('title', 'Unknown')}: {e}")
-                        continue
-                        
-                await browser.close()
+                await asyncio.sleep(2)  # Avoid too frequent requests
                 
-        logger.info(f"Successfully processed {len(processed_articles)} articles from {name}")
+            except Exception as e:
+                logger.error(f"Error processing article {article['link']}: {e}", exc_info=True)
+        
         return processed_articles
         
     except Exception as e:
-        logger.error(f"Error processing source {name}: {e}")
+        logger.error(f"Error processing site {site_name}: {e}", exc_info=True)
         return []
 
 async def main():
@@ -315,7 +263,7 @@ async def main():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         try:
-            # 获取用户输入
+            # Get user input
             print("Available categories:")
             for category in CATEGORIES:
                 print(f"- {category}")
@@ -323,19 +271,20 @@ async def main():
             selected_categories = input("Enter categories to crawl (comma-separated): ").split(",")
             selected_categories = [cat.strip() for cat in selected_categories]
             
-            # 初始化爬虫
+            # Initialize crawlers
             blog_crawler = BlogCrawler()
             rss_crawler = RSSCrawler()
             api_crawler = APICrawler()
-            # 收集选定的源
+            
+            # Collect selected sources
             sources = {}
             for category in selected_categories:
                 if category in CATEGORIES:
                     sources.update(CATEGORIES[category])
             
-            # 使用 aiohttp session 替代 playwright
+            # Use aiohttp session instead of playwright
             async with aiohttp.ClientSession() as session:
-                # 串行处理网站
+                # Process sites serially
                 all_articles = []
                 total_sites = len(sources)
                 
@@ -343,7 +292,7 @@ async def main():
                 for i, (site_name, site_config) in enumerate(sources.items(), 1):
                     print(f"\n[{i}/{total_sites}] Processing {site_name}...")
                     
-                    # 选择合适的爬虫
+                    # Choose the appropriate crawler
                     if site_config.get("is_api"):
                         crawler = api_crawler
                         result = await process_api_site(session, site_name, site_config, crawler)
@@ -351,7 +300,7 @@ async def main():
                         crawler = rss_crawler
                         result = await process_rss_site(session, site_name, site_config, crawler)
                     else:
-                        # 只有真正需要浏览器的网站才使用 playwright
+                        # Only use playwright for sites that truly require it
                         crawler = blog_crawler
                         result = await process_site(browser, site_name, site_config, crawler)
                     
@@ -362,7 +311,7 @@ async def main():
                 
                 logger.info(f"Total articles processed: {len(all_articles)}")
                 
-                # 保存结果
+                # Save results
                 os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
                 with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
                     json.dump({
