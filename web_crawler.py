@@ -15,21 +15,224 @@ import os
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Website configuration - Selectors validated with developer tools
+# Website configuration - Tech blogs focused on AI, Web3, and Paper Analysis
 SITES = {
-    "Wired": {
-        "url": "https://www.wired.com/tag/artificial-intelligence/",
-        "article_selector": "div.summary-item",
-        "title_selector": "h3",
-        "link_selector": "a.summary-item-tracking__hed-link",
-        "content_selector": ".article__body"
+    # AI 公司博客
+    "OpenAI Blog": {
+        "url": "https://openai.com/blog",
+        "article_selector": "article.post-card",
+        "title_selector": "h2.post-card-title",
+        "link_selector": "a.post-card-link",
+        "content_selector": "div.post-content"
     },
-    "TheVerge": {
-        "url": "https://www.theverge.com/ai-artificial-intelligence",
-        "article_selector": "h2.font-polysans",
-        "title_selector": "a",
+    "Anthropic Blog": {
+        "url": "https://www.anthropic.com/blog",
+        "article_selector": "article.blog-post",
+        "title_selector": "h2.blog-title",
+        "link_selector": "a.blog-link",
+        "content_selector": ".blog-content"
+    },
+    "DeepMind Blog": {
+        "url": "https://www.deepmind.com/blog",
+        "article_selector": "article.blog-card",
+        "title_selector": ".blog-title",
+        "link_selector": "a.blog-link",
+        "content_selector": ".blog-content"
+    },
+    "Stability AI Blog": {
+        "url": "https://stability.ai/blog",
+        "article_selector": ".blog-post",
+        "title_selector": ".post-title",
+        "link_selector": "a.post-link",
+        "content_selector": ".post-content"
+    },
+    "Hugging Face Blog": {
+        "url": "https://huggingface.co/blog",
+        "article_selector": "article.blog-post",
+        "title_selector": "h2.post-title",
+        "link_selector": "a.post-link",
+        "content_selector": ".post-content"
+    },
+
+    # Web3 相关
+    "a16z Crypto": {
+        "url": "https://a16zcrypto.com/posts/",
+        "article_selector": "article.post-card",
+        "title_selector": "h2.post-title",
+        "link_selector": "a.post-link",
+        "content_selector": ".post-content"
+    },
+    "Ethereum Blog": {
+        "url": "https://blog.ethereum.org/",
+        "article_selector": "article.blog-post",
+        "title_selector": "h2.blog-title",
+        "link_selector": "a.blog-link",
+        "content_selector": ".blog-content"
+    },
+    "Vitalik's Blog": {
+        "url": "https://vitalik.ca/",
+        "article_selector": ".post-list-item",
+        "title_selector": "h2",
         "link_selector": "a",
-        "content_selector": "div.duet--article--article-body-component"
+        "content_selector": ".post-content"
+    },
+    "Paradigm Research": {
+        "url": "https://www.paradigm.xyz/writing",
+        "article_selector": "article.blog-post",
+        "title_selector": ".post-title",
+        "link_selector": "a.post-link",
+        "content_selector": ".post-content"
+    },
+    "Uniswap Blog": {
+        "url": "https://blog.uniswap.org/",
+        "article_selector": ".blog-post",
+        "title_selector": ".post-title",
+        "link_selector": "a.post-link",
+        "content_selector": ".post-content"
+    },
+
+    # 论文分析博客
+    "Papers with Code": {  # 论文代码实现
+        "url": "https://paperswithcode.com/latest",
+        "article_selector": ".paper-card",
+        "title_selector": ".paper-title",
+        "link_selector": ".paper-link",
+        "content_selector": ".paper-abstract"
+    },
+    "Two Minute Papers": {  # AI论文视频解读
+        "url": "https://www.youtube.com/@TwoMinutePapers/videos",
+        "article_selector": "ytd-video-renderer",
+        "title_selector": "#video-title",
+        "link_selector": "#video-title",
+        "content_selector": "#description"
+    },
+    "Lil'Log": {  # 深度学习论文解读
+        "url": "https://lilianweng.github.io/",
+        "article_selector": ".post-list-item",
+        "title_selector": ".post-title",
+        "link_selector": "a.post-link",
+        "content_selector": ".post-content"
+    },
+    "The Gradient": {  # AI研究分析
+        "url": "https://thegradient.pub/",
+        "article_selector": "article.post",
+        "title_selector": ".post-title",
+        "link_selector": ".post-link",
+        "content_selector": ".post-content"
+    },
+    "ML Explained": {  # 机器学习论文解读
+        "url": "https://mlexplained.com/",
+        "article_selector": "article.post",
+        "title_selector": ".entry-title",
+        "link_selector": ".entry-title a",
+        "content_selector": ".entry-content"
+    },
+    "Berkeley AI Research Blog": {  # 学术研究博客
+        "url": "https://bair.berkeley.edu/blog/",
+        "article_selector": "article.post",
+        "title_selector": ".post-title",
+        "link_selector": ".post-link",
+        "content_selector": ".post-content"
+    },
+    "Distill.pub": {  # 高质量可视化解释
+        "url": "https://distill.pub/",
+        "article_selector": "d-article",
+        "title_selector": "h1",
+        "link_selector": "a.title-link",
+        "content_selector": "d-article"
+    },
+    "AI Alignment Forum": {  # AI安全与对齐
+        "url": "https://www.alignmentforum.org/",
+        "article_selector": ".PostsItem",
+        "title_selector": ".PostsTitle",
+        "link_selector": ".PostsTitle a",
+        "content_selector": ".PostsBody"
+    },
+
+    # 更多研究机构博客
+    "Stanford AI Lab": {
+        "url": "https://ai.stanford.edu/blog/",
+        "article_selector": "article.post",
+        "title_selector": ".post-title",
+        "link_selector": "a.post-link",
+        "content_selector": ".post-content"
+    },
+    "MIT AI Lab": {
+        "url": "https://www.csail.mit.edu/news",
+        "article_selector": ".news-item",
+        "title_selector": ".news-title",
+        "link_selector": ".news-link",
+        "content_selector": ".news-content"
+    },
+    "Google AI Blog": {
+        "url": "https://ai.googleblog.com/",
+        "article_selector": ".post",
+        "title_selector": ".post-title",
+        "link_selector": ".post-title a",
+        "content_selector": ".post-content"
+    },
+    "Microsoft Research": {
+        "url": "https://www.microsoft.com/en-us/research/blog/",
+        "article_selector": "article.blog-post",
+        "title_selector": ".blog-title",
+        "link_selector": ".blog-link",
+        "content_selector": ".blog-content"
+    },
+
+    # 中文技术博客
+    "机器之心": {
+        "url": "https://www.jiqizhixin.com/",
+        "article_selector": "article.article-item",
+        "title_selector": ".article-title",
+        "link_selector": ".article-link",
+        "content_selector": ".article-content"
+    },
+    "量子位": {
+        "url": "https://www.qbitai.com/",
+        "article_selector": ".article-item",
+        "title_selector": ".title",
+        "link_selector": "a.link",
+        "content_selector": ".article-content"
+    },
+    "PaperWeekly": {
+        "url": "https://www.paperweekly.site/",
+        "article_selector": ".article-item",
+        "title_selector": ".title",
+        "link_selector": ".title a",
+        "content_selector": ".content"
+    },
+    "InfoQ AI": {
+        "url": "https://www.infoq.cn/topic/AI",
+        "article_selector": ".article-item",
+        "title_selector": ".article-title",
+        "link_selector": ".article-link",
+        "content_selector": ".article-content"
+    },
+
+    # arXiv RSS 源
+    "arXiv AI": {
+        "url": "http://arxiv.org/rss/cs.AI",
+        "is_rss": True,  # 标记为 RSS 源
+        "article_selector": "item",
+        "title_selector": "title",
+        "link_selector": "link",
+        "content_selector": "description"
+    },
+    "arXiv ML": {
+        "url": "http://arxiv.org/rss/cs.LG",
+        "is_rss": True,
+        "article_selector": "item",
+        "title_selector": "title",
+        "link_selector": "link",
+        "content_selector": "description"
+    },
+    "arXiv CL": {  # 计算语言学
+        "url": "http://arxiv.org/rss/cs.CL",
+        "is_rss": True,
+        "article_selector": "item",
+        "title_selector": "title",
+        "link_selector": "link",
+        "content_selector": "description"
     }
 }
 
@@ -71,32 +274,43 @@ translator = pipeline(
     device=-1
 )
 
+async def get_rss_content(page, url: str) -> str:
+    """Get RSS feed content"""
+    try:
+        response = await page.goto(url)
+        if response and response.ok:
+            return await page.content()
+    except Exception as e:
+        logger.error(f"Error fetching RSS feed {url}: {e}")
+    return None
+
 async def get_page_content(page, url: str, site_config: dict) -> str:
     """Get page content with improved handling"""
+    # 处理 RSS 源
+    if site_config.get("is_rss"):
+        return await get_rss_content(page, url)
+    
+    # 原有的页面处理逻辑...
     for attempt in range(MAX_RETRIES):
         try:
-            # 设置用户代理和视口
             await page.set_viewport_size({"width": 1920, "height": 1080})
             await page.set_extra_http_headers({
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
             })
             
-            # 使用更快的加载策略
             response = await page.goto(
                 url, 
-                wait_until="domcontentloaded",  # 改为更快的等待条件
-                timeout=30000,  # 减少超时时间
+                wait_until="domcontentloaded",
+                timeout=30000,
             )
             
             if response is None or not response.ok:
                 raise Exception(f"Failed to load page: {response.status if response else 'No response'}")
             
-            # 等待页面加载完成
             await page.wait_for_load_state("domcontentloaded")
             await asyncio.sleep(2)
             
-            # 平滑滚动
             for _ in range(3):
                 await page.evaluate("""
                     window.scrollTo({
