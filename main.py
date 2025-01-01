@@ -5,7 +5,8 @@ from sources import (
     web3_blogs,
     research_blogs,
     chinese_blogs,
-    arxiv_sources
+    arxiv_sources,
+    paper_analysis
 )
 from crawlers import BlogCrawler, RSSCrawler
 
@@ -14,7 +15,8 @@ CATEGORIES = {
     "web3": web3_blogs.WEB3_BLOGS,
     "research": research_blogs.RESEARCH_BLOGS,
     "chinese": chinese_blogs.CHINESE_BLOGS,
-    "arxiv": arxiv_sources.ARXIV_SOURCES
+    "arxiv": arxiv_sources.ARXIV_SOURCES,
+    "paper_analysis": paper_analysis.PAPER_ANALYSIS_BLOGS
 }
 
 async def main():
