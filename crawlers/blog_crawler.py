@@ -61,7 +61,7 @@ class BlogCrawler(BaseCrawler):
                 # Log response details
                 if response:
                     logger.info(f"Response status: {response.status}")
-                    logger.info(f"Response headers: {response.headers}")
+                    logger.debug(f"Response headers: {response.headers}")
                     logger.debug(f"Response URL: {response.url}")
                     
                     if not response.ok:
@@ -117,170 +117,124 @@ class BlogCrawler(BaseCrawler):
                 logger.error(f"Attempt {attempt + 1}/{self.max_retries} failed for {url}: {e}")
                 if attempt < self.max_retries - 1:
                     wait_time = 2 ** attempt
-                    logger.info(f"Retrying in {wait_time} seconds...")
+                    logger.debug(f"Retrying in {wait_time} seconds...")
                     await asyncio.sleep(wait_time)
                 else:
                     logger.error(f"All attempts failed for {url}")
                     return None
 
     async def parse_articles(self, html: str, site_config: dict) -> list:
-        """解析文章列表"""
         if not html:
-            logger.warning("No HTML content to parse")
             return []
             
         articles = []
         soup = BeautifulSoup(html, 'html.parser')
+        base_url = site_config['base_url'].rstrip('/')
         
+        # Find all article elements
         elements = soup.select(site_config['article_selector'])
-        logger.info(f"Found {len(elements)} elements matching selector '{site_config['article_selector']}'")
+        logger.debug(f"Found {len(elements)} elements matching selector '{site_config['article_selector']}'")
         
-        for article in elements[:self.articles_per_site]:
+        for element in elements[:self.articles_per_site]:
             try:
-                # Hugging Face specific handling
-                if "huggingface.co" in site_config["url"]:
-                    logger.debug(f"Processing Hugging Face article element: {article.get('class', [])}")
-                    
-                    # Get link element
-                    link_elem = article.select_one(site_config["link_selector"])
-                    logger.debug(f"Link element found: {link_elem is not None}")
-                    if link_elem:
-                        logger.debug(f"Link element attributes: {link_elem.attrs}")
-                    
-                    # Get title element with detailed logging
-                    title_elem = (
-                        article.select_one("h2") or 
-                        article.select_one("h3") or 
-                        article.select_one("span.font-bold")
-                    )
-                    logger.debug(f"Title element found: {title_elem is not None}")
-                    if title_elem:
-                        logger.debug(f"Title element text: {title_elem.get_text(strip=True)}")
-                    
-                    link = link_elem.get('href') if link_elem else None
-                    title = title_elem.get_text(strip=True) if title_elem else None
-                    
-                    logger.debug(f"Extracted title: {title}")
-                    logger.debug(f"Extracted link: {link}")
-                    
-                    # If no title found but have link, try to extract from URL
-                    if not title and link:
-                        path = link.split('/')[-1]
-                        title = ' '.join(word.capitalize() for word in path.split('-'))
-                    
-                    if link and not link.startswith('http'):
-                        link = urljoin(site_config['base_url'], link)
+                # Get link
+                link = element.get('href')
+                title = None
                 
-                # 对于 Anthropic 的特殊处理
-                elif "anthropic.com" in site_config["url"]:
-                    # The link is the article element itself
-                    link = article.get('href')
-                    title_elem = None
-                    
-                    # Find the closest h3 in any parent div
-                    parent = article.parent
-                    while parent and parent.name == 'div':
-                        title_elem = parent.find('h3')
-                        if title_elem:
-                            break
-                        parent = parent.parent
-                    
-                    # If no title found in parents, try to find in siblings
-                    if not title_elem:
-                        next_sibling = article.find_next_sibling()
-                        while next_sibling:
-                            title_elem = next_sibling.find('h3')
-                            if title_elem:
-                                break
-                            next_sibling = next_sibling.find_next_sibling()
-                    
-                    title = title_elem.get_text(strip=True) if title_elem else None
-                    
-                    # If still no title, try to extract from the URL
-                    if not title and link:
-                        # Convert URL path to title (e.g., "announcing-claude-3" -> "Announcing Claude 3")
-                        path = link.split('/')[-1]
-                        title = ' '.join(word.capitalize() for word in path.split('-'))
-                    
-                    if link and not link.startswith('http'):
-                        link = urljoin(site_config['base_url'], link)
-            
-                title_elem = article.select_one(site_config["title_selector"])
-                link_elem = article.select_one(site_config["link_selector"])
-                
-                title = title_elem.get_text(strip=True) if title_elem else None
-                link = link_elem.get('href') if link_elem else None
+                # Handle relative URLs immediately
                 if link and not link.startswith('http'):
-                    base_url = site_config.get('base_url', site_config['url'])
-                    link = urljoin(base_url, link)
+                    link = f"{base_url}{link}"
+                
+                # Special handling for Anthropic blog
+                if "anthropic.com" in site_config["url"]:
+                    # Try multiple possible title selectors
+                    title_selectors = [
+                        "h3",  # Direct h3 heading
+                        "span.text-xl",  # Text-xl span
+                        "div[class*='text-xl']",  # Div with text-xl class
+                        "h3.font-display",  # Specific heading class
+                        "[class*='heading']"  # Any element with heading in class
+                    ]
+                    
+                    for selector in title_selectors:
+                        title_elem = element.select_one(selector)
+                        if title_elem:
+                            title = title_elem.get_text(strip=True)
+                            if title:
+                                break
+                    
+                    # If still no title found, look in parent elements
+                    if not title:
+                        parent = element.parent
+                        while parent and not title:
+                            for selector in title_selectors:
+                                title_elem = parent.select_one(selector)
+                                if title_elem:
+                                    title = title_elem.get_text(strip=True)
+                                    if title:
+                                        break
+                            parent = parent.parent
+                    
+                    # Skip the main news page link
+                    if link == '/news':
+                        continue
+
+                    # Add debug logging
+                    logger.debug(f"Found title: {title} for link: {link}")
                 
                 if title and link:
                     articles.append({
                         "title": title,
                         "link": link
                     })
-                    logger.info(f"Found article: {title} - {link}")  # Added link to logging
-                else:
-                    logger.warning(f"Skipping article - Title: {title}, Link: {link}")
+                    logger.debug(f"Found article: {title} - {link}")
                 
             except Exception as e:
                 logger.error(f"Error parsing article: {e}")
                 continue
-        
-        logger.info(f"Successfully parsed {len(articles)} articles")  # Added summary logging
+
+        logger.info(f"Successfully parsed {len(articles)} articles")
         return articles
 
     async def get_article_content(self, page, url: str, site_config: dict) -> str:
         """获取文章内容"""
-        html = await self.get_content(page, url, site_config)
-        if not html:
-            return None
-        
         try:
-            soup = BeautifulSoup(html, 'html.parser')
-            content_div = soup.select_one(site_config["content_selector"])
+            logger.debug(f"Fetching content from: {url}")
             
-            if content_div:
-                # 移除不需要的元素
-                for elem in content_div.select('script, style, iframe, nav, header, footer, button'):
-                    elem.decompose()
+            # Navigate with longer timeout
+            response = await page.goto(url, wait_until="networkidle", timeout=30000)
+            
+            if response and response.ok:
+                # First wait for any dynamic content to load
+                await page.wait_for_load_state("networkidle")
                 
-                # 获取结构化内容
-                content_parts = []
-                
-                # Get headings for structure
-                headings = content_div.find_all(['h1', 'h2', 'h3'])
-                for heading in headings:
-                    section_title = heading.get_text(strip=True)
-                    # Get all paragraph content until next heading
-                    section_content = []
-                    current = heading.find_next_sibling()
-                    while current and current.name not in ['h1', 'h2', 'h3']:
-                        if current.name in ['p', 'li']:
-                            text = current.get_text(strip=True)
-                            if text:  # Only add non-empty text
-                                section_content.append(text)
-                        current = current.find_next_sibling()
+                if "anthropic.com" in url:
+                    try:
+                        # Wait for main content
+                        await page.wait_for_selector("main", timeout=10000)
+                        
+                        # Get content from article or main
+                        for selector in ["article", "main article", "main div[class*='prose']"]:
+                            content_elem = await page.query_selector(selector)
+                            if content_elem:
+                                text = await content_elem.inner_text()
+                                if text and len(text.strip()) > 0:
+                                    return text.strip()
+                                    
+                    except Exception as e:
+                        logger.warning(f"Error getting Anthropic content: {e}")
+                        
+                # Default content extraction if no special handling needed
+                content_selector = site_config.get("content_selector", "article")
+                try:
+                    content_elem = await page.query_selector(content_selector)
+                    if content_elem:
+                        return await content_elem.inner_text()
+                except Exception as e:
+                    logger.error(f"Error extracting content with selector {content_selector}: {e}")
                     
-                    if section_content:  # Only add sections with content
-                        content_parts.append({
-                            "title": section_title,
-                            "content": " ".join(section_content)
-                        })
-                
-                # If no sections found, get all paragraph content
-                if not content_parts:
-                    paragraphs = content_div.find_all(['p', 'li'])
-                    content_text = " ".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
-                    if content_text:
-                        content_parts.append({
-                            "title": "Main Content",
-                            "content": content_text
-                        })
-                
-                return content_parts if content_parts else None
-                
-        except Exception as e:
-            logger.error(f"Error extracting content from {url}: {e}")
+            return ""  # Return empty string instead of None
             
-        return None 
+        except Exception as e:
+            logger.error(f"Error fetching article content: {e}")
+            return ""  # Return empty string instead of None 

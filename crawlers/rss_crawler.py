@@ -1,6 +1,6 @@
-"""RSS 爬虫"""
 from bs4 import BeautifulSoup
 import logging
+import feedparser
 from .base_crawler import BaseCrawler
 from playwright.async_api import async_playwright
 
@@ -71,7 +71,7 @@ class RSSCrawler(BaseCrawler):
             
         articles = []
         try:
-            soup = BeautifulSoup(xml, 'xml')  # 使用 xml 解析器
+            soup = BeautifulSoup(xml, 'xml')  
             
             items = soup.find_all(site_config['article_selector'])
             logger.info(f"Found {len(items)} items in RSS feed")
@@ -99,6 +99,74 @@ class RSSCrawler(BaseCrawler):
         return articles
 
     async def get_article_content(self, session, url: str, site_config: dict) -> str:
-        """获取 RSS 文章内容"""
-        # 大多数 RSS 源在 feed 中已包含内容
-        return None 
+        """获取文章内容"""
+        # For RSS feeds that include content in the feed
+        if hasattr(self, '_current_article_content') and self._current_article_content:
+            content = self._current_article_content
+            self._current_article_content = None  # Clear for next article
+            return content
+            
+        # For RSS feeds that need content fetching
+        try:
+            if site_config.get("requires_browser"):
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch()
+                    page = await browser.new_page()
+                    response = await page.goto(url, wait_until="networkidle")
+                    
+                    if response and response.ok:
+                        # Wait for content
+                        if site_config.get("content_selector"):
+                            await page.wait_for_selector(site_config["content_selector"])
+                            content_elem = await page.query_selector(site_config["content_selector"])
+                            if content_elem:
+                                return await content_elem.inner_text()
+                    
+                    await browser.close()
+            else:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        html = await response.text()
+                        if html:
+                            soup = BeautifulSoup(html, 'html.parser')
+                            content_elem = soup.select_one(site_config["content_selector"])
+                            if content_elem:
+                                return content_elem.get_text(strip=True)
+        except Exception as e:
+            logger.error(f"Error fetching article content from {url}: {e}")
+        return None
+
+    async def parse_articles(self, feed_content: str, site_config: dict) -> list:
+        """解析 RSS 文章列表"""
+        if not feed_content:
+            return []
+            
+        articles = []
+        try:
+            feed = feedparser.parse(feed_content)
+            items = feed.entries
+            logger.info(f"Found {len(items)} items in RSS feed")
+            
+            for item in items[:self.articles_per_site]:
+                title = item.get('title')
+                link = item.get('link')
+                
+                # More robust content extraction
+                content = None
+                if 'content' in item and item.content:
+                    content = item.content[0].get('value', '')
+                elif 'description' in item:
+                    content = item.description
+                elif 'summary' in item:
+                    content = item.summary
+                
+                if title and link:
+                    articles.append({
+                        "title": title,
+                        "link": link,
+                        "content": content  # Store content directly in article dict
+                    })
+                    logger.info(f"Found article: {title}")
+        except Exception as e:
+            logger.error(f"Error parsing RSS feed: {e}")
+        return articles 

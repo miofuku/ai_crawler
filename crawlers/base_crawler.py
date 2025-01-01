@@ -6,9 +6,10 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 class BaseCrawler(ABC):
-    def __init__(self):
+    def __init__(self, articles_per_site: int = 2):
+        """初始化爬虫"""
+        self.articles_per_site = articles_per_site
         self.max_retries = 3
-        self.articles_per_site = 5
 
     @abstractmethod
     async def get_content(self, page, url: str, site_config: dict) -> str:

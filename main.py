@@ -54,40 +54,65 @@ CATEGORIES = {
     "paper_analysis": paper_analysis.PAPER_ANALYSIS_BLOGS
 }
 
-async def summarize_content(content, summarizer, translator):
-    """生成结构化摘要"""
+async def summarize_content(content: str, summarizer, translator) -> dict:
+    """Generate structured summary with key points"""
     if not content:
-        return None
+        return {
+            "summary": {"en": "", "zh": ""},
+            "key_points": {"en": [], "zh": []}
+        }
         
     try:
-        summary = {"en": [], "zh": []}
+        # Clean and prepare content
+        cleaned_content = ' '.join(str(content).split())
         
-        for section in content:
-            # Split content into chunks if too long
-            section_content = section["content"]
-            chunks = [section_content[i:i+1000] for i in range(0, len(section_content), 1000)]
-            
-            section_summary = []
-            for chunk in chunks:
-                summary_en = summarizer(chunk, max_length=150, min_length=50, do_sample=False)[0]["summary_text"]
-                section_summary.append(summary_en)
-            
-            full_section_summary = " ".join(section_summary)
-            summary_zh = translator(full_section_summary)[0]["translation_text"]
-            
-            summary["en"].append({
-                "title": section["title"],
-                "content": full_section_summary
-            })
-            summary["zh"].append({
-                "title": section["title"],
-                "content": summary_zh
-            })
-            
-        return summary
+        # Split content into paragraphs
+        paragraphs = [p.strip() for p in cleaned_content.split('\n') if p.strip()]
+        
+        # Combine paragraphs into a single text for initial summarization
+        full_text = ' '.join(paragraphs)
+        
+        # Generate initial summary
+        initial_summary = summarizer(
+            full_text[:1024],  # Limit input length
+            max_length=150,
+            min_length=50,
+            do_sample=False
+        )
+        summary_en = initial_summary[0]['summary_text'] if initial_summary else ""
+        
+        # Extract key points (using the full text)
+        key_points_en = []
+        chunk_size = 1024
+        chunks = [full_text[i:i + chunk_size] for i in range(0, len(full_text), chunk_size)]
+        
+        for chunk in chunks:
+            point_summary = summarizer(
+                chunk,
+                max_length=50,  # Shorter summaries for key points
+                min_length=20,
+                do_sample=False
+            )
+            if point_summary:
+                key_points_en.append(point_summary[0]['summary_text'])
+        
+        # Translate summaries
+        summary_zh = translator(summary_en)[0]['translation_text'] if summary_en else ""
+        key_points_zh = [translator(point)[0]['translation_text'] for point in key_points_en]
+        
+        return {
+            "summary": {
+                "en": summary_en,
+                "zh": summary_zh
+            },
+            "key_points": {
+                "en": key_points_en,
+                "zh": key_points_zh
+            }
+        }
         
     except Exception as e:
-        logger.error(f"Error summarizing content: {e}")
+        logger.error(f"Error in summarize_content: {e}")
         return None
 
 async def process_site(browser, site_name: str, site_config: dict, crawler: BaseCrawler) -> List[Dict]:
@@ -119,8 +144,8 @@ async def process_site(browser, site_name: str, site_config: dict, crawler: Base
                                 "site": site_name,
                                 "title": article["title"],
                                 "link": article["link"],
-                                "summary_en": summary["en"],
-                                "summary_zh": summary["zh"],
+                                "summary_en": summary["summary"]["en"],
+                                "summary_zh": summary["summary"]["zh"],
                                 "timestamp": datetime.now().isoformat()
                             }
                             processed_articles.append(article_data)
@@ -186,6 +211,104 @@ async def process_api_site(session, site_name: str, site_config: dict, crawler: 
 async def process_rss_site(session, site_name: str, site_config: dict, crawler: BaseCrawler) -> List[Dict]:
     """Process a single RSS-based site"""
     return await process_api_site(session, site_name, site_config, crawler)  # RSS processing is similar to API
+
+async def process_source(name: str, config: dict) -> List[Dict]:
+    try:
+        logger.info(f"Processing source: {name}")
+        
+        # Initialize appropriate crawler
+        if config.get("is_rss"):
+            crawler = RSSCrawler()
+        elif config.get("is_api"):
+            crawler = APICrawler()
+        else:
+            crawler = BlogCrawler()
+
+        # Get articles
+        articles = await crawler.get_articles(name, config)
+        if not articles:
+            logger.warning(f"No articles found for {name}")
+            return []
+
+        # Process each article
+        processed_articles = []
+        async with aiohttp.ClientSession() as session:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch()
+                page = await browser.new_page()
+                
+                for article in articles:
+                    try:
+                        # Get content based on crawler type
+                        if config.get("is_rss"):
+                            content = await crawler.get_article_content(session, article["link"], config)
+                        elif config.get("is_api"):
+                            content = article.get("content")
+                        else:
+                            content = await crawler.get_article_content(page, article["link"], config)
+                        
+                        if content:
+                            # Clean content
+                            cleaned_content = ' '.join(str(content).split())
+                            
+                            # Calculate appropriate max_length based on input length
+                            input_length = len(cleaned_content.split())
+                            max_length = min(150, max(40, input_length // 2))  # Set max_length to half of input length
+                            
+                            try:
+                                # Generate summary with dynamic max_length
+                                summary_result = summarizer(
+                                    cleaned_content[:1024],  # Limit input to 1024 chars
+                                    max_length=max_length,
+                                    min_length=min(30, max_length - 10),  # Ensure min_length is less than max_length
+                                    do_sample=False
+                                )
+                                
+                                # Extract summary text
+                                summary_en = summary_result[0]['summary_text'] if summary_result else ""
+                                
+                                # Generate Chinese translation
+                                if summary_en:
+                                    translation_result = translator(summary_en)
+                                    summary_zh = translation_result[0]['translation_text'] if translation_result else ""
+                                else:
+                                    summary_zh = ""
+                                
+                                processed_articles.append({
+                                    "title": article["title"],
+                                    "link": article["link"],
+                                    "content": cleaned_content,  
+                                    "summary_en": summary_en,
+                                    "summary_zh": summary_zh,
+                                    "timestamp": datetime.now().isoformat()
+                                })
+                                logger.info(f"Processed article: {article['title']}")
+                                
+                            except Exception as e:
+                                logger.error(f"Error processing summaries: {e}")
+                                processed_articles.append({
+                                    "title": article["title"],
+                                    "link": article["link"],
+                                    "content": cleaned_content,  
+                                    "summary_en": "",
+                                    "summary_zh": "",
+                                    "timestamp": datetime.now().isoformat()
+                                })
+                        else:
+                            logger.warning(f"No content found for article: {article['title']}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error processing article {article.get('title', 'Unknown')}: {e}")
+                        continue
+                        
+                await browser.close()
+                
+        logger.info(f"Successfully processed {len(processed_articles)} articles from {name}")
+        return processed_articles
+        
+    except Exception as e:
+        logger.error(f"Error processing source {name}: {e}")
+        return []
 
 async def main():
     # Initialize playwright browser
