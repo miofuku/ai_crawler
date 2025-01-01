@@ -1,4 +1,3 @@
-"""基础爬虫类"""
 from abc import ABC, abstractmethod
 import logging
 from typing import List, Dict
