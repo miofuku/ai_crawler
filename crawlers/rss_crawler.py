@@ -122,9 +122,10 @@ class RSSCrawler(BaseCrawler):
             # Check stored content first
             if url in self._article_contents:
                 content = self._article_contents.pop(url)  # Remove after use
+                logger.info(f"Using stored content for URL: {url}")
                 return content
-                
-            # For OpenAI blog specifically
+
+            # Special handling for OpenAI blog
             if "openai.com" in url:
                 async with async_playwright() as p:
                     browser = await p.chromium.launch()
@@ -195,6 +196,33 @@ class RSSCrawler(BaseCrawler):
                     finally:
                         await browser.close()
                     
+            # Special handling for Hugging Face blog
+            if "huggingface.co" in url:
+                logger.info(f"Starting Hugging Face content fetch for: {url}")
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch()
+                    page = await browser.new_page()
+                    try:
+                        await page.goto(url, wait_until="networkidle", timeout=30000)
+                        
+                        # Try multiple content selectors
+                        for selector in ["main article", "div.prose", ".markdown", "main div[class*='prose']"]:
+                            try:
+                                content_elem = await page.query_selector(selector)
+                                if content_elem:
+                                    text = await content_elem.inner_text()
+                                    if text and len(text.strip()) > 100:  # Ensure we have substantial content
+                                        logger.info(f"Found Hugging Face content with selector: {selector}")
+                                        return text.strip()
+                            except Exception as e:
+                                logger.debug(f"Hugging Face selector {selector} failed: {e}")
+                                continue
+                            
+                    except Exception as e:
+                        logger.error(f"Error getting Hugging Face content: {e}")
+                    finally:
+                        await browser.close()
+
             # For Google Research blog
             if "blog.research.google" in url:
                 # Use the content from RSS feed if available

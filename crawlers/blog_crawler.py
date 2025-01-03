@@ -265,22 +265,6 @@ class BlogCrawler(BaseCrawler):
                         return await content_elem.inner_text()
                 except Exception as e:
                     logger.error(f"Error extracting content with selector {content_selector}: {e}")
-                    
-                if "huggingface.co" in url:
-                    try:
-                        # Wait for main content
-                        await page.wait_for_selector("main", timeout=10000)
-                        
-                        # Try multiple content selectors
-                        for selector in ["main article", "div.prose", ".markdown", "main div[class*='prose']"]:
-                            content_elem = await page.query_selector(selector)
-                            if content_elem:
-                                text = await content_elem.inner_text()
-                                if text and len(text.strip()) > 100:  # Ensure we have substantial content
-                                    return text.strip()
-                                    
-                    except Exception as e:
-                        logger.warning(f"Error getting Hugging Face content: {e}")
                 
             return ""  # Return empty string instead of None
             
