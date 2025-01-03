@@ -2,12 +2,12 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import List, Dict
-from summarizer import summarize_content
+from translator import translate_content
 from utils import get_articles_per_site
 
 logger = logging.getLogger(__name__)
 
-async def process_site(browser, site_name: str, site_config: dict, crawler, summarizer, translator) -> List[Dict]:
+async def process_site(browser, site_name: str, site_config: dict, crawler, translator) -> List[Dict]:
     """Process a single blog-based site"""
     try:
         page = await browser.new_page()
@@ -30,14 +30,14 @@ async def process_site(browser, site_name: str, site_config: dict, crawler, summ
                     content = await crawler.get_article_content(page, article["link"], site_config)
                     if content:
                         logger.info(f"Got content for article: {article['title']} ({len(content)} chars)")
-                        summary = await summarize_content(content, summarizer, translator)
-                        if summary:
+                        translation = await translate_content(content, translator)
+                        if translation:
                             article_data = {
                                 "site": site_name,
                                 "title": article["title"],
                                 "link": article["link"],
-                                "summary_en": summary["summary"]["en"],
-                                "summary_zh": summary["summary"]["zh"],
+                                "content": translation["original"],
+                                "translation_zh": translation["translation"]["zh"],
                                 "timestamp": datetime.now().isoformat()
                             }
                             processed_articles.append(article_data)
@@ -61,7 +61,7 @@ async def process_site(browser, site_name: str, site_config: dict, crawler, summ
         logger.error(f"Error processing site {site_name}: {e}", exc_info=True)
         return []
 
-async def process_api_site(session, site_name: str, site_config: dict, crawler, summarizer, translator) -> List[Dict]:
+async def process_api_site(session, site_name: str, site_config: dict, crawler, translator) -> List[Dict]:
     """Process a single API-based site"""
     try:
         html = await crawler.get_content(session, site_config["url"], site_config)
@@ -76,14 +76,14 @@ async def process_api_site(session, site_name: str, site_config: dict, crawler, 
             try:
                 content = await crawler.get_article_content(session, article["link"], site_config)
                 if content:
-                    summary = await summarize_content(content, summarizer, translator)
-                    if summary:
+                    translation = await translate_content(content, translator)
+                    if translation:
                         article_data = {
                             "site": site_name,
                             "title": article["title"],
                             "link": article["link"],
-                            "summary_en": summary["summary"]["en"],
-                            "summary_zh": summary["summary"]["zh"],
+                            "content": translation["original"],
+                            "translation_zh": translation["translation"]["zh"],
                             "timestamp": datetime.now().isoformat()
                         }
                         processed_articles.append(article_data)
@@ -100,7 +100,7 @@ async def process_api_site(session, site_name: str, site_config: dict, crawler, 
         logger.error(f"Error processing site {site_name}: {e}")
         return []
 
-async def process_rss_site(session, site_name: str, site_config: dict, crawler, summarizer, translator) -> List[Dict]:
+async def process_rss_site(session, site_name: str, site_config: dict, crawler, translator) -> List[Dict]:
     """Process a single RSS-based site"""
     try:
         # Set articles per site limit
@@ -121,14 +121,14 @@ async def process_rss_site(session, site_name: str, site_config: dict, crawler, 
                 content = await crawler.get_article_content(session, article["link"], site_config)
                 if content:
                     logger.info(f"Got content for article: {article['title']} ({len(content)} chars)")
-                    summary = await summarize_content(content, summarizer, translator)
-                    if summary:
+                    translation = await translate_content(content, translator)
+                    if translation:
                         article_data = {
                             "site": site_name,
                             "title": article["title"],
                             "link": article["link"],
-                            "summary_en": summary["summary"]["en"],
-                            "summary_zh": summary["summary"]["zh"],
+                            "content": translation["original"],
+                            "translation_zh": translation["translation"]["zh"],
                             "timestamp": datetime.now().isoformat()
                         }
                         processed_articles.append(article_data)

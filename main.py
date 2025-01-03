@@ -17,7 +17,7 @@ from crawlers.api_crawler import APICrawler
 from playwright.async_api import async_playwright
 import aiohttp
 from processor import process_site, process_api_site, process_rss_site
-from summarizer import summarizer, translator
+from translator import translator
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -69,13 +69,13 @@ async def main():
                     
                     if site_config.get("is_api"):
                         crawler = api_crawler
-                        result = await process_api_site(session, site_name, site_config, crawler, summarizer, translator)
+                        result = await process_api_site(session, site_name, site_config, crawler, translator)
                     elif site_config.get("is_rss"):
                         crawler = rss_crawler
-                        result = await process_rss_site(session, site_name, site_config, crawler, summarizer, translator)
+                        result = await process_rss_site(session, site_name, site_config, crawler, translator)
                     else:
                         crawler = blog_crawler
-                        result = await process_site(browser, site_name, site_config, crawler, summarizer, translator)
+                        result = await process_site(browser, site_name, site_config, crawler, translator)
                     
                     if isinstance(result, list):
                         all_articles.extend(result)
