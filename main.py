@@ -3,7 +3,6 @@ import json
 import os
 from datetime import datetime
 import logging
-from typing import List, Dict
 from sources import (
     ai_company_blogs,
     web3_blogs,
@@ -12,7 +11,6 @@ from sources import (
     arxiv_sources,
     paper_analysis
 )
-from crawlers.base_crawler import BaseCrawler
 from crawlers.blog_crawler import BlogCrawler
 from crawlers.rss_crawler import RSSCrawler
 from crawlers.api_crawler import APICrawler
@@ -40,6 +38,24 @@ CATEGORIES = {
     "arxiv": arxiv_sources.ARXIV_SOURCES,
     "paper_analysis": paper_analysis.PAPER_ANALYSIS_BLOGS
 }
+
+# Simple fixed limit for all sites
+ARTICLES_PER_SITE_LIMIT = 2
+
+def get_articles_per_site(site_url: str, source_type: str) -> int:
+    """
+    Get the number of articles to fetch (simplified version).
+    
+    Args:
+        site_url: The URL of the site
+        source_type: Type of source (rss, blog, paper, api)
+    
+    Returns:
+        int: Number of articles to fetch (fixed at 2)
+    """
+    return ARTICLES_PER_SITE_LIMIT
+
+logger.info(f"Article limit configuration: {ARTICLES_PER_SITE_LIMIT} articles per site")
 
 async def main():
     async with async_playwright() as p:

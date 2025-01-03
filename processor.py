@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict
 from summarizer import summarize_content
+from main import get_articles_per_site
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +12,10 @@ async def process_site(browser, site_name: str, site_config: dict, crawler, summ
     try:
         page = await browser.new_page()
         try:
+            # Set articles per site limit
+            crawler.articles_per_site = get_articles_per_site(site_config["url"], "blog")
+            logger.info(f"Setting article limit for {site_name} to {crawler.articles_per_site}")
+            
             html = await crawler.get_content(page, site_config["url"], site_config)
             articles = await crawler.parse_articles(html, site_config)
             
@@ -98,6 +103,10 @@ async def process_api_site(session, site_name: str, site_config: dict, crawler, 
 async def process_rss_site(session, site_name: str, site_config: dict, crawler, summarizer, translator) -> List[Dict]:
     """Process a single RSS-based site"""
     try:
+        # Set articles per site limit
+        crawler.articles_per_site = get_articles_per_site(site_config["url"], "rss")
+        logger.info(f"Setting article limit for {site_name} to {crawler.articles_per_site}")
+        
         html = await crawler.get_content(session, site_config["url"], site_config)
         articles = await crawler.parse_articles(html, site_config)
         
