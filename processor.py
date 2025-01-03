@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict
 from summarizer import summarize_content
-from main import get_articles_per_site
+from utils import get_articles_per_site
 
 logger = logging.getLogger(__name__)
 
